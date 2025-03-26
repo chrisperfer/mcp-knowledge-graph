@@ -1,0 +1,58 @@
+.camera-controls-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.camera-controls-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.camera-controls-row label {
+  font-size: 0.9rem;
+  color: #e0e0e0;
+}
+
+.camera-controls-row select {
+  padding: 5px;
+  border-radius: 4px;
+  border: 1px solid #555;
+  background-color: rgba(60, 64, 72, 0.8);
+  color: #e0e0e0;
+  font-size: 0.9rem;
+  min-width: 120px;
+}
+
+.camera-controls-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.camera-controls-toggle label {
+  font-size: 0.9rem;
+  color: #e0e0e0;
+}
+
+.camera-controls-button {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.camera-controls-button button {
+  padding: 6px 12px;
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.camera-controls-button button:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+} 

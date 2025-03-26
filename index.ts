@@ -11,6 +11,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import minimist from 'minimist';
 import { isAbsolute } from 'path';
+import http from 'http';
+
+// Import visualization server modules
+import { startServer, stopServer } from './server.js';
+
+// Global reference for visualization server
+export let vizServer: http.Server | null = null;
 
 // Parse args and handle paths safely
 const argv = minimist(process.argv.slice(2));
@@ -194,8 +201,8 @@ const knowledgeGraphManager = new KnowledgeGraphManager();
 
 // The server instance and tools exposed to Claude
 const server = new Server({
-  name: "memory-server",
-  version: "1.0.0",
+  name: "mcp-knowledge-graph",
+  version: "1.0.1",
 },    {
     capabilities: {
       tools: {},
@@ -375,6 +382,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["names"],
         },
       },
+      // Visualization commands
+      {
+        name: "mcp_visualize_graph",
+        description: "Start a visualization server for the knowledge graph",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "mcp_start_visualize_graph",
+        description: "Start the knowledge graph visualization server if it was disabled at startup",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "mcp_stop_visualize_graph",
+        description: "Stop the running knowledge graph visualization server",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -408,6 +440,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.searchNodes(args.query as string), null, 2) }] };
     case "open_nodes":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.openNodes(args.names as string[]), null, 2) }] };
+    case "mcp_visualize_graph":
+      return { content: [{ type: "text", text: "Knowledge graph visualization is available at http://localhost:3000\nIf the visualization window is not open, click the link above to view it." }] };
+    case "mcp_start_visualize_graph":
+      try {
+        if (vizServer) {
+          return { content: [{ type: "text", text: "Visualization server is already running at http://localhost:3000" }] };
+        }
+        vizServer = startServer();
+        return { content: [{ type: "text", text: "Knowledge graph visualization server started at http://localhost:3000\nThe visualization should open automatically in your default browser." }] };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text", text: `Failed to start visualization server: ${errorMessage}\nPlease make sure you have installed the required dependencies by running:\nnpm install express open` }] };
+      }
+    case "mcp_stop_visualize_graph":
+      try {
+        if (!vizServer) {
+          return { content: [{ type: "text", text: "No visualization server is currently running." }] };
+        }
+        stopServer(vizServer);
+        vizServer = null;
+        return { content: [{ type: "text", text: "Knowledge graph visualization server has been stopped." }] };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text", text: `Error stopping visualization server: ${errorMessage}` }] };
+      }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -417,6 +474,40 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Knowledge Graph MCP Server running on stdio");
+  
+  // Auto-start visualization server if not disabled
+  if (!argv['no-viz']) {
+    try {
+      vizServer = startServer();
+      console.error("Knowledge graph visualization started automatically");
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('Failed to start visualization server:', errorMessage);
+    }
+  }
+  
+  // Register shutdown handlers
+  process.on('SIGINT', () => {
+    console.error('Shutting down (SIGINT)...');
+    
+    // Stop the visualization server if it's running
+    if (vizServer) {
+      stopServer(vizServer);
+    }
+    
+    process.exit(0);
+  });
+  
+  process.on('SIGTERM', () => {
+    console.error('Shutting down (SIGTERM)...');
+    
+    // Stop the visualization server if it's running
+    if (vizServer) {
+      stopServer(vizServer);
+    }
+    
+    process.exit(0);
+  });
 }
 
 main().catch((error) => {

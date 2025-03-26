@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Graph Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        .container {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding: 20px;
+            background-color: #333;
+            color: white;
+            text-align: center;
+        }
+        .graph {
+            flex: 1;
+            background-color: #ff69b4;
+        }
+        .node circle {
+            stroke: #fff;
+            stroke-width: 2px;
+        }
+        .node.pinned circle {
+            stroke: #ffd700;
+            stroke-width: 3px;
+        }
+        .pin-indicator {
+            fill: #ffd700;
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .node text {
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .link {
+            stroke: #999;
+            stroke-opacity: 0.6;
+        }
+        .entity-details {
+            position: absolute;
+            right: 20px;
+            top: 80px;
+            width: 300px;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            display: none;
+        }
+        .entity-details h3 {
+            margin-top: 0;
+        }
+        .entity-details p {
+            margin: 5px 0;
+        }
+        .tooltip {
+            position: absolute;
+            padding: 10px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            pointer-events: none;
+            font-size: 12px;
+            max-width: 250px;
+            z-index: 100;
+            box-shadow: 0 5px 10px rgba(0,0,0,0.2);
+        }
+        .tooltip h4 {
+            margin: 0 0 5px 0;
+        }
+        .tooltip ul {
+            margin: 5px 0;
+            padding-left: 20px;
+        }
+        .status-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            background-color: #eee;
+            display: none;
+        }
+        .auto-refresh {
+            position: absolute;
+            top: 20px;
+            right: 150px;
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+            color: white;
+        }
+        .auto-refresh input {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Knowledge Graph Visualization</h1>
+            <div class="auto-refresh">
+                <input type="checkbox" id="autoRefresh" checked>
+                <label for="autoRefresh">Real-time updates</label>
+            </div>
+        </div>
+        <div id="graph" class="graph"></div>
+        <div id="entityDetails" class="entity-details">
+            <h3 id="entityName"></h3>
+            <p id="entityType"></p>
+            <div id="observations"></div>
+            <div id="relations"></div>
+        </div>
+        <div id="statusIndicator" class="status-indicator"></div>
+    </div>
+
+    <script>
+        // Globals for state
+        let currentDataHash = '';
+        let svgContainer = null;
+        let tooltip = null;
+        let refreshInterval = null;
+        let isFirstLoad = true;
+        let simulation = null;
+        let nodeElements = null;
+        let linkElements = null;
+        let linkTextElements = null;
+        let currentTransform = null;
+        let graphData = { nodes: [], links: [] };
+        let eventSource = null; // SSE connection
+        
+        // Generate a simple hash from the data for comparison
+        function generateHash(data) {
+            return JSON.stringify(data);
+        }
+        
+        // Load the data from memory.jsonl
+        async function loadData() {
+            try {
+                // Get the data directly from the API endpoint - removed timestamp to prevent forced reloads
+                const response = await fetch('/api/memory-data');
+                
+                if (!response.ok) {
+                    console.warn('Failed to fetch memory data from API');
+                    return { nodes: [], links: [], hasChanged: false };
+                }
+                
+                // Parse the JSON response directly
+                const jsonData = await response.json();
+                
+                if (!jsonData || jsonData.length === 0) {
+                    console.warn('Memory data is empty');
+                    return { nodes: [], links: [], hasChanged: false };
+                }
+                
+                // Process data for D3 format
+                const nodes = [];
+                const links = [];
+                const nodeMap = {};
+                
+                // First pass: collect all entities
+                jsonData.forEach(item => {
+                    if (item.type === 'entity') {
+                        const node = {
+                            id: item.name,
+                            name: item.name,
+                            entityType: item.entityType,
+                            observations: item.observations || [],
+                            group: item.entityType
+                        };
+                        nodes.push(node);
+                        nodeMap[item.name] = node;
+                    }
+                });
+                
+                // Second pass: collect all relations
+                jsonData.forEach(item => {
+                    if (item.type === 'relation') {
+                        links.push({
+                            source: item.from,
+                            target: item.to,
+                            type: item.relationType
+                        });
+                    }
+                });
+                
+                const dataHash = generateHash({ nodes, links });
+                const hasChanged = currentDataHash !== dataHash;
+                currentDataHash = dataHash;
+                
+                return { 
+                    nodes, 
+                    links,
+                    hasChanged
+                };
+            } catch (error) {
+                console.error('Error loading data:', error);
+                showStatus('Error loading data', 'error');
+                return { nodes: [], links: [], hasChanged: false };
+            }
+        }
+
+        // Initialize the visualization
+        async function initGraph() {
+            // Set up the SVG container if it doesn't exist
+            if (!svgContainer) {
+                const width = document.getElementById('graph').clientWidth;
+                const height = document.getElementById('graph').clientHeight;
+                
+                svgContainer = d3.select('#graph')
+                    .append('svg')
+                    .attr('width', width)
+                    .attr('height', height);
+                    
+                // Define arrowhead marker for links
+                svgContainer.append('defs').append('marker')
+                    .attr('id', 'arrowhead')
+                    .attr('viewBox', '-0 -5 10 10')
+                    .attr('refX', 20)
+                    .attr('refY', 0)
+                    .attr('orient', 'auto')
+                    .attr('markerWidth', 6)
+                    .attr('markerHeight', 6)
+                    .attr('xoverflow', 'visible')
+                    .append('svg:path')
+                    .attr('d', 'M 0,-5 L 10 ,0 L 0,5')
+                    .attr('fill', '#999')
+                    .style('stroke', 'none');
+                
+                // Add zoom functionality with zoom state persistence
+                const g = svgContainer.append('g')
+                    .attr('class', 'everything');
+                
+                const zoom = d3.zoom()
+                    .scaleExtent([0.1, 4])
+                    .on('zoom', (event) => {
+                        g.attr('transform', event.transform);
+                        currentTransform = event.transform;
+                    });
+                
+                svgContainer.call(zoom);
+                
+                // Initialize tooltip if it doesn't exist
+                if (!tooltip) {
+                    tooltip = d3.select('body').append('div')
+                        .attr('class', 'tooltip')
+                        .style('opacity', 0);
+                }
+                
+                // Create container groups for graph elements
+                g.append('g').attr('class', 'links');
+                g.append('g').attr('class', 'link-labels');
+                g.append('g').attr('class', 'nodes');
+                
+                // Close details panel when clicking on svg background
+                svgContainer.on('click', function(event) {
+                    if (event.target === this) {
+                        document.getElementById('entityDetails').style.display = 'none';
+                    }
+                });
+            }
+            
+            // Load initial data and create graph
+            await updateGraph();
+        }
+        
+        // Update the graph with new data
+        async function updateGraph() {
+            const newData = await loadData();
+            
+            // If no changes detected and not first load, skip redraw
+            if (!newData.hasChanged && !isFirstLoad) {
+                return;
+            }
+            
+            if (newData.hasChanged && !isFirstLoad) {
+                showStatus('Graph updated', 'success');
+            }
+            
+            // Store the new data
+            graphData = newData;
+            isFirstLoad = false;
+            
+            const svg = d3.select('#graph svg');
+            const g = svg.select('g.everything');
+            
+            // Create force simulation or update it
+            if (!simulation) {
+                simulation = d3.forceSimulation(graphData.nodes)
+                    .force('link', d3.forceLink(graphData.links).id(d => d.id).distance(150))
+                    .force('charge', d3.forceManyBody().strength(-300))
+                    .force('center', d3.forceCenter(
+                        document.getElementById('graph').clientWidth / 2, 
+                        document.getElementById('graph').clientHeight / 2
+                    ))
+                    .force('collision', d3.forceCollide().radius(60));
+            } else {
+                // Update simulation with new nodes while preserving positions
+                const oldNodesMap = {};
+                simulation.nodes().forEach(node => {
+                    oldNodesMap[node.id] = { x: node.x, y: node.y, vx: node.vx, vy: node.vy };
+                });
+                
+                // Transfer positions from old nodes to new nodes
+                graphData.nodes.forEach(node => {
+                    if (oldNodesMap[node.id]) {
+                        node.x = oldNodesMap[node.id].x;
+                        node.y = oldNodesMap[node.id].y;
+                        node.vx = oldNodesMap[node.id].vx;
+                        node.vy = oldNodesMap[node.id].vy;
+                        // Fix node position initially to prevent jumping
+                        node.fx = node.x;
+                        node.fy = node.y;
+                    }
+                });
+                
+                // Update the simulation with new data
+                simulation.nodes(graphData.nodes);
+                simulation.force('link').links(graphData.links);
+            }
+            
+            // Update links
+            linkElements = g.select('.links')
+                .selectAll('line')
+                .data(graphData.links, d => `${d.source.id || d.source}-${d.target.id || d.target}-${d.type}`);
+            
+            linkElements.exit().remove();
+            
+            const newLinks = linkElements.enter()
+                .append('line')
+                .attr('class', 'link')
+                .attr('marker-end', 'url(#arrowhead)');
+            
+            linkElements = newLinks.merge(linkElements);
+            
+            // Update link labels
+            linkTextElements = g.select('.link-labels')
+                .selectAll('text')
+                .data(graphData.links, d => `${d.source.id || d.source}-${d.target.id || d.target}-${d.type}`);
+            
+            linkTextElements.exit().remove();
+            
+            const newLinkTexts = linkTextElements.enter()
+                .append('text')
+                .attr('font-size', '10px')
+                .attr('text-anchor', 'middle')
+                .attr('dy', -5)
+                .text(d => d.type);
+            
+            linkTextElements = newLinkTexts.merge(linkTextElements);
+            
+            // Update nodes
+            nodeElements = g.select('.nodes')
+                .selectAll('.node')
+                .data(graphData.nodes, d => d.id);
+            
+            nodeElements.exit().remove();
+            
+            const newNodes = nodeElements.enter()
+                .append('g')
+                .attr('class', 'node')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+            
+            // Add circles to new nodes
+            newNodes.append('circle')
+                .attr('r', 25)
+                .attr('fill', d => {
+                    // Color based on entity type
+                    const colors = {
+                        'Person': '#4285F4',
+                        'Place': '#34A853',
+                        'Thing': '#FBBC05',
+                        'Concept': '#EA4335'
+                    };
+                    return colors[d.entityType] || '#999';
+                });
+            
+            // Add pin indicator (📌 emoji as text)
+            newNodes.append('text')
+                .attr('class', 'pin-indicator')
+                .attr('dy', -28)
+                .attr('text-anchor', 'middle')
+                .text('📌')
+                .style('display', d => d.fx !== null ? null : 'none');
+            
+            // Add text labels to new nodes
+            newNodes.append('text')
+                .attr('dy', 30)
+                .attr('dx', 0)
+                .attr('text-anchor', 'middle')
+                .text(d => d.name);
+            
+            // Merge nodes for updating
+            nodeElements = newNodes.merge(nodeElements);
+            
+            // Add hover, click, and double-click events
+            nodeElements
+                .on('click', showEntityDetails)
+                .on('dblclick', unpinNode)
+                .on('mouseover', showTooltip)
+                .on('mouseout', hideTooltip)
+                .on('mousemove', moveTooltip);
+            
+            // Update pin indicator visibility for all nodes
+            nodeElements.select('.pin-indicator')
+                .style('display', d => d.fx !== null ? null : 'none');
+            
+            // Update node class based on pinned state
+            nodeElements.classed('pinned', d => d.fx !== null);
+            
+            // Update simulation with tick handler
+            simulation.on('tick', tick);
+            
+            // Restart simulation with a gentle alpha
+            simulation.alpha(0.3).restart();
+            
+            // Apply saved transform if available
+            if (currentTransform) {
+                g.attr('transform', currentTransform);
+            }
+        }
+        
+        // Render graph on each tick
+        function tick() {
+            // Update links
+            linkElements
+                .attr('x1', d => d.source.x)
+                .attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x)
+                .attr('y2', d => d.target.y);
+            
+            // Update link labels
+            linkTextElements
+                .attr('x', d => (d.source.x + d.target.x) / 2)
+                .attr('y', d => (d.source.y + d.target.y) / 2);
+            
+            // Update nodes
+            nodeElements
+                .attr('transform', d => `translate(${d.x},${d.y})`);
+        }
+        
+        // Drag functions
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+        
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+        
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            // Keep the node fixed at its current position
+            // d.fx and d.fy are already set to the final position
+        }
+        
+        // Show tooltip on hover
+        function showTooltip(event, d) {
+            // Only show tooltip if there are observations
+            if (d.observations && d.observations.length > 0) {
+                let tooltipContent = `<h4>${d.name} (${d.entityType})</h4>`;
+                tooltipContent += '<ul>';
+                d.observations.forEach(obs => {
+                    tooltipContent += `<li>${obs}</li>`;
+                });
+                tooltipContent += '</ul>';
+                
+                tooltip.html(tooltipContent)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 10) + 'px')
+                    .style('opacity', 1);
+            }
+        }
+        
+        function hideTooltip() {
+            tooltip.style('opacity', 0);
+        }
+        
+        function moveTooltip(event) {
+            tooltip.style('left', (event.pageX + 10) + 'px')
+                   .style('top', (event.pageY - 10) + 'px');
+        }
+        
+        // Show entity details
+        function showEntityDetails(event, d) {
+            const detailsDiv = document.getElementById('entityDetails');
+            document.getElementById('entityName').textContent = d.name;
+            document.getElementById('entityType').textContent = `Type: ${d.entityType}`;
+            
+            // Show observations
+            const obsDiv = document.getElementById('observations');
+            obsDiv.innerHTML = '<h4>Observations:</h4>';
+            if (d.observations && d.observations.length > 0) {
+                const obsList = document.createElement('ul');
+                d.observations.forEach(obs => {
+                    const item = document.createElement('li');
+                    item.textContent = obs;
+                    obsList.appendChild(item);
+                });
+                obsDiv.appendChild(obsList);
+            } else {
+                obsDiv.innerHTML += '<p>No observations</p>';
+            }
+            
+            // Show relations
+            const relDiv = document.getElementById('relations');
+            relDiv.innerHTML = '<h4>Relations:</h4>';
+            
+            const outgoingLinks = graphData.links.filter(link => 
+                (link.source.id === d.id) || (typeof link.source === 'string' && link.source === d.id)
+            );
+            const incomingLinks = graphData.links.filter(link => 
+                (link.target.id === d.id) || (typeof link.target === 'string' && link.target === d.id)
+            );
+            
+            if (outgoingLinks.length === 0 && incomingLinks.length === 0) {
+                relDiv.innerHTML += '<p>No relations</p>';
+            } else {
+                const relList = document.createElement('ul');
+                
+                outgoingLinks.forEach(link => {
+                    const item = document.createElement('li');
+                    const targetId = typeof link.target === 'string' ? link.target : link.target.id;
+                    item.textContent = `→ ${link.type} → ${targetId}`;
+                    relList.appendChild(item);
+                });
+                
+                incomingLinks.forEach(link => {
+                    const item = document.createElement('li');
+                    const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+                    item.textContent = `← ${link.type} ← ${sourceId}`;
+                    relList.appendChild(item);
+                });
+                
+                relDiv.appendChild(relList);
+            }
+            
+            detailsDiv.style.display = 'block';
+        }
+        
+        // Unpin node on double-click
+        function unpinNode(event, d) {
+            event.stopPropagation(); // Prevent event from bubbling up
+            d.fx = null;
+            d.fy = null;
+            
+            // Update visual indicators
+            d3.select(this)
+                .classed('pinned', false)
+                .select('.pin-indicator')
+                .style('display', 'none');
+            
+            // Restart simulation with a gentle alpha
+            simulation.alpha(0.3).restart();
+        }
+        
+        // Show a status message
+        function showStatus(message, type = 'info') {
+            const statusElem = document.getElementById('statusIndicator');
+            statusElem.textContent = message;
+            statusElem.style.display = 'block';
+            
+            // Set color based on type
+            if (type === 'error') {
+                statusElem.style.backgroundColor = '#f8d7da';
+                statusElem.style.color = '#721c24';
+            } else if (type === 'success') {
+                statusElem.style.backgroundColor = '#d4edda';
+                statusElem.style.color = '#155724';
+            } else {
+                statusElem.style.backgroundColor = '#cce5ff';
+                statusElem.style.color = '#004085';
+            }
+            
+            // Hide after 3 seconds
+            setTimeout(() => {
+                statusElem.style.display = 'none';
+            }, 3000);
+        }
+        
+        // Toggle auto-refresh functionality
+        function setupAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+            
+            // Setup initial state
+            if (checkbox.checked) {
+                startAutoRefresh();
+            }
+            
+            // Handle checkbox changes
+            checkbox.addEventListener('change', function() {
+                if (this.checked) {
+                    startAutoRefresh();
+                    showStatus('Real-time updates enabled', 'info');
+                } else {
+                    stopAutoRefresh();
+                    showStatus('Real-time updates disabled', 'info');
+                }
+            });
+        }
+        
+        // Start auto-refresh with SSE
+        function startAutoRefresh() {
+            // Close any existing SSE connection
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            // Close any existing polling interval (legacy fallback)
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+            
+            try {
+                // Connect to SSE endpoint
+                eventSource = new EventSource('/api/memory-updates');
+                
+                // Handle connection open
+                eventSource.onopen = function() {
+                    console.log('%c SSE connection established', 'background: #222; color: #bada55; padding: 5px;');
+                    showStatus('Connected to server updates', 'success');
+                };
+                
+                // Handle incoming messages
+                eventSource.onmessage = function(event) {
+                    console.log('%c SSE update received:', 'background: #222; color: #bada55; padding: 5px;', event.data);
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.updated) {
+                            console.log(`%c Data updated at ${data.updated}`, 'background: #222; color: #bada55; padding: 5px;');
+                            updateGraph();
+                        } else if (data.connected) {
+                            console.log('%c Initial connection confirmed', 'background: #222; color: #bada55; padding: 5px;');
+                        }
+                    } catch (e) {
+                        console.error('Error parsing SSE message:', e);
+                    }
+                };
+                
+                // Handle errors
+                eventSource.onerror = function(error) {
+                    console.error('SSE connection error:', error);
+                    
+                    // Close the connection
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
+                    
+                    // Show error status
+                    showStatus('Connection error, falling back to polling', 'error');
+                    
+                    // Fallback to traditional polling if SSE fails
+                    if (!refreshInterval) {
+                        console.log('Falling back to polling');
+                        refreshInterval = setInterval(async () => {
+                            await updateGraph();
+                        }, 10000); // Longer polling interval for fallback
+                    }
+                };
+            } catch (error) {
+                console.error('Failed to establish SSE connection:', error);
+                
+                // Fallback to traditional polling
+                if (!refreshInterval) {
+                    refreshInterval = setInterval(async () => {
+                        await updateGraph();
+                    }, 10000); // Longer polling interval for fallback
+                }
+            }
+        }
+        
+        // Stop auto-refresh
+        function stopAutoRefresh() {
+            // Close SSE connection
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            // Clear polling interval if it exists
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+        }
+        
+        // Handle window resize
+        function handleResize() {
+            if (svgContainer) {
+                svgContainer
+                    .attr('width', document.getElementById('graph').clientWidth)
+                    .attr('height', document.getElementById('graph').clientHeight);
+                
+                if (simulation) {
+                    simulation.force('center', d3.forceCenter(
+                        document.getElementById('graph').clientWidth / 2, 
+                        document.getElementById('graph').clientHeight / 2
+                    ));
+                    simulation.alpha(0.1).restart();
+                }
+            }
+        }
+        
+        // Initialize the graph and auto-refresh
+        window.addEventListener('load', () => {
+            initGraph();
+            setupAutoRefresh();
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', handleResize);
+    </script>
+</body>
+</html> 

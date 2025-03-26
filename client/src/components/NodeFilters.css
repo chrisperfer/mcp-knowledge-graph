@@ -1,0 +1,22 @@
+.node-filters-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.node-filters-content .filter-item {
+  display: flex;
+  align-items: center;
+}
+
+.node-filters-content .filter-item label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.node-filters-content .filter-item input[type="checkbox"] {
+  cursor: pointer;
+} 

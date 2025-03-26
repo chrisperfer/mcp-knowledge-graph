@@ -1,0 +1,13 @@
+{
+    "mcpServers": {
+
+      "mcp-knowledge-graph": {
+        "command": "node",
+        "args": [
+          "/Users/chris/projects/mcp-knowledge-graph/dist/index.js",
+          "--port",
+          "3001"
+        ]
+      }
+    }
+  }

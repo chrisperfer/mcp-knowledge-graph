@@ -53,7 +53,17 @@ coverage/
 
 # Memory files (except examples)
 *.jsonl
-!example/*.jsonl
+!example*.jsonl
+
+# Local documentation
+PUBLISHING.md
+VERSION_UPDATE.md
+
+# History files
+.history/
+
+# Package files
+*.tgz
 
 # OS generated files
 .DS_Store
@@ -63,3 +73,6 @@ coverage/
 .Trashes
 ehthumbs.db
 Thumbs.db
+**/static/**
+ontology.md
+dist/memory.jsonl
