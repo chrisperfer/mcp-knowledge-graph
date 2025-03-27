@@ -10,7 +10,7 @@ const ForceGraph = forwardRef(({
   onNodeClick,
   onNodeHover,
   initialControlsMode = 'orbit',
-  initialAutoRotate = false,
+  initialAutoRotate = true,
   filteredNodeTypes = {},
   filteredLinkTypes = {}
 }, ref) => {
@@ -559,6 +559,19 @@ const ForceGraph = forwardRef(({
     }
   }, [handleZoomToFit, filteredData]);
 
+  // Configure orbit controls when autoRotate changes
+  useEffect(() => {
+    if (ref.current) {
+      const controls = ref.current.controls();
+      if (controls) {
+        controls.autoRotate = autoRotate;
+        controls.autoRotateSpeed = 1.0;
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+      }
+    }
+  }, [autoRotate]);
+
   return (
     <div className="force-graph-container">
       <NavigationToolbar 
@@ -598,8 +611,11 @@ const ForceGraph = forwardRef(({
         onLinkHover={handleLinkHover}
         controlType={controlsMode}
         autoRotate={autoRotate}
-        backgroundColor="#000011"
+        enableRotate={true}
+        rotateSpeed={0.5}
         enableNavigationControls={true}
+        enableNodeDrag={true}
+        backgroundColor="#000011"
         enablePointerInteraction={true}
         showNavInfo={false}
         nodeLabel={node => `

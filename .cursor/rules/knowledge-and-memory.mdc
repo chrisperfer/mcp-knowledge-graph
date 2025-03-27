@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# memory and knowlege  management
+
+Please use the knowledge graph mcp to look for solutions or documentation applicable to the current task, and please update it with anything that seems important according to the existing ontology in [ontology.md](mdc:ontology.md) if possible.
+

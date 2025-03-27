@@ -8,7 +8,7 @@ import './CameraControls.css';
 const CameraControls = ({
   controlsMode = 'orbit',
   onControlsModeChange,
-  autoRotate = false,
+  autoRotate = true,
   onAutoRotateChange,
   onZoomToFit
 }) => {
